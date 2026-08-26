@@ -26,11 +26,12 @@ Belit acts as a "Public Good" infrastructure for the Ethereum ecosystem. By open
 The development of Belit requires a rare intersection of compiler engineering, formal methods, and low-level security architectures.
 
 **Lead Compiler Engineer:** Elif Nur Ayhan (@codebygunes)
-I am a Software Engineer with a Computer Engineering background from Bilkent University, specializing in deep-tech security, formal verification, and LLVM-based transformations. The architectural foundation of Belit directly leverages my extensive prior experience in building advanced verification and obfuscation engines, specifically:
-* **Mutlak:** Engineered a hybrid runtime tracing and verification engine utilizing the Z3 theorem prover for live bytecode mutation and neuro-symbolic verification.
-* **Girdap:** Developed an LLVM pass plugin utilizing Poincaré disk hyperbolic geometry for advanced dynamic control flow obfuscation and JIT execution mapping.
+I am a Software Engineer with a Computer Engineering background from Bilkent University, specializing in deep-tech security, formal verification, and LLVM-based transformations. My core expertise lies in the exact technical stack required to execute the Belit architecture:
+* **Compiler Engineering & LLVM Passes:** Extensive hands-on experience developing custom LLVM pass plugins, manipulating Intermediate Representation (IR), and building dynamic control flow and obfuscation engines at the bytecode level.
+* **Formal Verification (Z3 SMT):** Proven capability in modeling complex execution states and integrating the Z3 theorem prover for live runtime tracing, logic validation, and neuro-symbolic verification.
 
-The current Alpha PoC of Belit (which already demonstrates Two-Pass EVM-to-LLVM lifting and successful Z3 integration detecting The DAO re-entrancy) proves that the technical execution of this pipeline is highly feasible and derisked.
+**Feasibility & Risk Mitigation:** 
+The technical execution of this pipeline is already highly derisked. The current Alpha PoC of Belit—available in the provided GitHub repository—successfully demonstrates the most challenging components of this architecture: a functional Two-Pass EVM-to-LLVM lifter and a working Z3 integration that mathematically detects real-world exploits (e.g., The DAO re-entrancy).
 
 ## 3. Budget & Funding Request
 The current Alpha PoC proves the fundamental feasibility of the Belit architecture. This funding request is designed to scale the prototype into a production-ready Web3 infrastructure tool over a 16-week (4-month) intensive R&D period. The budget is calculated based on a Lead Compiler Engineer working full-time (40 hours/week) at a competitive deep-tech engineering rate of $75/hour.
