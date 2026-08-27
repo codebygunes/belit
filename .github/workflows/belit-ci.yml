@@ -16,7 +16,11 @@ jobs:
     - name: Install System Dependencies (LLVM 21 & Z3)
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm-21 llvm-21-dev libz3-dev libgtest-dev cmake build-essential
+        sudo apt-get install -y wget software-properties-common
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 21
+        sudo apt-get install -y llvm-21-dev libz3-dev libgtest-dev cmake build-essential
 
     - name: Configure CMake
       run: cmake -B build -S .
