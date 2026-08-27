@@ -1,71 +1,94 @@
-cmake_minimum_required(VERSION 3.14)
-project(Belit_Lifter CXX)
+cmake_minimum_required(VERSION 3.20)
+project(BelitVerificationEngine VERSION 1.0.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ==========================================
-# BAĞIMLILIKLAR (LLVM 18 & Z3 SMT)
-# ==========================================
+# Required for building shared modules/plugins (.so)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(MSVC)
+    add_compile_options(/W0)
+else()
+    add_compile_options(-w)
+endif()
+
 find_package(LLVM REQUIRED CONFIG)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 find_package(Z3 REQUIRED)
-include_directories(${Z3_INCLUDE_DIRS})
+message(STATUS "Found Z3 ${Z3_VERSION_STRING}")
 
 include_directories(include)
 
 # ==========================================
-# MILESTONE 1: EVM to LLVM IR Lifter Motoru
+# Core Library Configuration
 # ==========================================
-add_library(EvmLifter STATIC src/evm_lifter/EvmToIR.cpp)
-target_link_libraries(EvmLifter PRIVATE LLVMSupport LLVMCore)
+set(BELIT_SOURCES
+    src/targets/EVMLifter.cpp
+    src/targets/WasmLifter.cpp
+    src/ir/LLVMTranslator.cpp
+    src/llvm_passes/DeobfuscationPass.cpp
+    src/verifier/Z3SymbolicEngine.cpp
+)
 
-# Unit & E2E Test Executable
-add_executable(BelitTests tests/unit_tests/LifterTest.cpp)
-target_link_libraries(BelitTests PRIVATE 
-    EvmLifter 
-    gtest 
-    gtest_main 
+add_library(belit_core STATIC ${BELIT_SOURCES})
+
+llvm_map_components_to_libnames(LLVM_LIBS
+    Core
+    Support
+    Analysis
+    TransformUtils
+    Passes
+)
+
+target_link_libraries(belit_core PUBLIC
+    ${LLVM_LIBS}
+    z3
+)
+
+# ==========================================
+# LLVM Pass Plugin
+# ==========================================
+add_library(BelitPassPlugin MODULE
+    src/llvm_passes/BelitPassPlugin.cpp
+)
+target_link_libraries(BelitPassPlugin PRIVATE belit_core)
+
+# ==========================================
+# Main CLI Executable Configuration
+# ==========================================
+add_executable(belit src/main.cpp)
+target_link_libraries(belit PRIVATE belit_core)
+
+# ==========================================
+# Unit & Benchmark Tests Configuration
+# ==========================================
+enable_testing()
+
+find_package(GTest REQUIRED)
+include_directories(${GTEST_INCLUDE_DIRS})
+
+set(TEST_SOURCES
+    tests/test_main.cpp
+    tests/unit_tests/LifterTest.cpp
+    tests/unit_tests/Z3SymbolicEngineTest.cpp
+    tests/unit_tests/DeobfuscationBenchmarkTest.cpp
+    tests/e2e_tests/EndToEndVulnerabilityTest.cpp
+)
+
+add_executable(belit_tests ${TEST_SOURCES})
+
+target_link_libraries(belit_tests PRIVATE
+    belit_core
+    ${GTEST_LIBRARIES}
     pthread
-    LLVMSupport 
-    LLVMCore 
-    LLVMIRReader
 )
 
-# ==========================================
-# MILESTONE 2: Deobfuscation Pass Plugin
-# ==========================================
-add_library(DeobfuscationPass MODULE src/llvm_passes/DeobfuscationPass.cpp)
-set_target_properties(DeobfuscationPass PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(DeobfuscationPass PRIVATE ${Z3_LIBRARIES})
-
-if(APPLE)
-    set_property(TARGET DeobfuscationPass APPEND_STRING PROPERTY LINK_FLAGS "-undefined dynamic_lookup")
-endif()
-
-# ==========================================
-# MILESTONE 3 & 4: Z3 SMT Formal Verification
-# ==========================================
-add_library(Z3Verifier STATIC src/smt_solver/Z3Verifier.cpp)
-target_link_libraries(Z3Verifier PRIVATE ${Z3_LIBRARIES} LLVMCore)
-
-target_sources(BelitTests PRIVATE 
-    tests/unit_tests/Z3VerifierTest.cpp
-    tests/e2e_tests/EndToEndReentrancyTest.cpp
-)
-target_link_libraries(BelitTests PRIVATE Z3Verifier ${Z3_LIBRARIES})
-
-# ==========================================
-# CLI ENTRY POINT (belit_cli)
-# ==========================================
-add_executable(belit_cli src/main.cpp)
-target_link_libraries(belit_cli PRIVATE 
-    EvmLifter 
-    Z3Verifier 
-    ${Z3_LIBRARIES} 
-    LLVMSupport 
-    LLVMCore 
-    LLVMIRReader
-)
+include(GoogleTest)
+gtest_discover_tests(belit_tests)

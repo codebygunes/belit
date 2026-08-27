@@ -1,113 +1,107 @@
-#include "llvm/IR/Function.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include <z3++.h>
-#include <map>
+#include "belit/llvm_passes/DeobfuscationPass.hpp"
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/PatternMatch.h>
+#include <llvm/Support/raw_ostream.h>
 
-using namespace llvm;
+using namespace llvm::PatternMatch;
 
-namespace {
-struct DeobfuscationPass : public PassInfoMixin<DeobfuscationPass> {
+namespace belit {
+namespace passes {
+
+llvm::PreservedAnalyses DeobfuscationPass::run(llvm::Module& M, llvm::ModuleAnalysisManager&) {
+    bool changed = false;         
     
-    // Engine to translate LLVM IR into a Z3 Mathematical Model (AST) on-the-fly
-    // SOLUTION 1: Passing the Z3 Context by reference from the outside
-    z3::expr translateToZ3(z3::context &ctx, Value *V, std::map<Value*, z3::expr> &symVars) {
-        // SOLUTION 2: Using find() instead of operator[] to prevent Default Constructor errors
-        auto it = symVars.find(V);
-        if (it != symVars.end()) return it->second;
-        
-        if (auto *CI = dyn_cast<ConstantInt>(V)) {
-            return ctx.bv_val(static_cast<uint64_t>(CI->getZExtValue()), 256u);
+    // Iterate through all functions in the module to apply optimization and deobfuscation
+    for (auto& F : M) {
+        if (!F.isDeclaration()) {
+            changed |= foldConstants(F);
+            changed |= removeOpaquePredicates(F);
         }
-        
-        if (auto *Arg = dyn_cast<Argument>(V)) {
-            z3::expr sym = ctx.bv_const(Arg->getName().str().c_str(), 256u);
-            symVars.insert({V, sym});
-            return sym;
-        }
-        
-        if (auto *I = dyn_cast<Instruction>(V)) {
-            if (I->getOpcode() == Instruction::Add) {
-                return translateToZ3(ctx, I->getOperand(0), symVars) + translateToZ3(ctx, I->getOperand(1), symVars);
-            } else if (I->getOpcode() == Instruction::Mul) {
-                return translateToZ3(ctx, I->getOperand(0), symVars) * translateToZ3(ctx, I->getOperand(1), symVars);
-            } else if (I->getOpcode() == Instruction::URem) {
-                return z3::urem(translateToZ3(ctx, I->getOperand(0), symVars), translateToZ3(ctx, I->getOperand(1), symVars));
-            }
-        }
-        
-        // Fallback for unknown instructions
-        z3::expr sym = ctx.bv_const("unknown", 256u);
-        symVars.insert({V, sym});
-        return sym;
-    }
+    }         
+    
+    return changed ? llvm::PreservedAnalyses::none() : llvm::PreservedAnalyses::all();
+}
 
-    PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-        bool Changed = false;
-        
-        // Z3-POWERED OPAQUE PREDICATE SOLVER
-        for (BasicBlock &BB : F) {
-            if (auto *BI = dyn_cast<BranchInst>(BB.getTerminator())) {
-                if (BI->isConditional()) {
-                    if (auto *Cmp = dyn_cast<ICmpInst>(BI->getCondition())) {
-                        if (Cmp->getPredicate() == CmpInst::ICMP_EQ) {
-                            try {
-                                // SOLUTION 1 CONTINUED: Keeping Z3 objects at the function (local scope) level
-                                // rather than class level to ensure the LLVM Pass remains portable.
-                                z3::context ctx;
-                                std::map<Value*, z3::expr> symVars;
-                                
-                                z3::expr lhs = translateToZ3(ctx, Cmp->getOperand(0), symVars);
-                                z3::expr rhs = translateToZ3(ctx, Cmp->getOperand(1), symVars);
-                                
-                                z3::expr condition = (lhs == rhs);
-                                
-                                z3::solver solver(ctx);
-                                // Asking Z3: "Is there any possibility that this condition is FALSE?"
-                                solver.add(!condition);
-                                
-                                if (solver.check() == z3::unsat) {
-                                    // Z3 proved it: Impossible! Therefore, this condition is always TRUE.
-                                    BI->setCondition(ConstantInt::getTrue(Cmp->getContext()));
-                                    Changed = true;
-                                }
-                            } catch (...) {
-                                // Ignore translation errors to prevent compiler crashes.
-                            }
+bool DeobfuscationPass::foldConstants(llvm::Function& F) {
+    bool changed = false;
+    
+    // Arithmetic simplification and constant folding at the LLVM IR level
+    for (auto& BB : F) {
+        for (auto instIt = BB.begin(), instEnd = BB.end(); instIt != instEnd;) {
+            llvm::Instruction& I = *instIt++;
+            
+            // Example: ADD(X, 0) -> X or SUB(X, 0) -> X transformations
+            if (auto* BO = llvm::dyn_cast<llvm::BinaryOperator>(&I)) {
+                llvm::Value* op1 = BO->getOperand(0);
+                llvm::Value* op2 = BO->getOperand(1);
+                
+                if (BO->getOpcode() == llvm::Instruction::Add || BO->getOpcode() == llvm::Instruction::Sub) {
+                    if (auto* C = llvm::dyn_cast<llvm::ConstantInt>(op2)) {
+                        if (C->isZero()) {
+                            BO->replaceAllUsesWith(op1);
+                            BO->eraseFromParent();
+                            changed = true;
                         }
                     }
                 }
             }
         }
-
-        // CFG Simplification
-        for (BasicBlock &BB : F) {
-            Changed |= ConstantFoldTerminator(&BB);
-        }
-
-        // Remove unreachable blocks orphaned by Z3's branch pruning
-        Changed |= removeUnreachableBlocks(F);
-
-        return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
     }
-};
-} // end anonymous namespace
-
-extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
-    return {
-        LLVM_PLUGIN_API_VERSION, "DeobfuscationPass", "1.0",
-        [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, FunctionPassManager &FPM, ArrayRef<PassBuilder::PipelineElement>) {
-                    if (Name == "deobfuscate") {
-                        FPM.addPass(DeobfuscationPass());
-                        return true;
-                    }
-                    return false;
-                });
-        }
-    };
+    return changed;
 }
+
+bool DeobfuscationPass::removeOpaquePredicates(llvm::Function& F) {
+    bool changed = false;
+    
+    // Cleanup of opaque conditions and dead basic blocks that are always true/false
+    for (auto& BB : F) {
+        auto* TI = BB.getTerminator();
+        if (auto* BI = llvm::dyn_cast<llvm::BranchInst>(TI)) {
+            if (BI->isConditional()) {
+                if (auto* CI = llvm::dyn_cast<llvm::ConstantInt>(BI->getCondition())) {
+                    // If the condition reduced to a constant value, flatten the control flow
+                    llvm::BasicBlock* targetDest = CI->isOne() ? BI->getSuccessor(0) : BI->getSuccessor(1);
+                    llvm::BasicBlock* deadDest = CI->isOne() ? BI->getSuccessor(1) : BI->getSuccessor(0);
+                    
+                    // Update references of the dead branch and make the jump unconditional
+                    llvm::BranchInst::Create(targetDest, BI);
+                    BI->eraseFromParent();
+                    
+                    // Mark basic block end optimization
+                    deadDest->removePredecessor(&BB);
+                    changed = true;
+                }
+            }
+        }
+    }
+    return changed;
+}
+
+void runDeobfuscationPipeline(llvm::Module& M) {
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+    llvm::PassBuilder PB;
+    
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    
+    llvm::ModulePassManager MPM;         
+    
+    // 1. Adding custom Belit Deobfuscation Pass
+    MPM.addPass(DeobfuscationPass());         
+    
+    // 2. Standard O2 level optimizations to clean up remaining dead code
+    MPM.addPass(PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
+    
+    MPM.run(M, MAM);
+}
+
+} // namespace passes
+} // namespace belit

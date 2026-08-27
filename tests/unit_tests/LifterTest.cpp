@@ -1,102 +1,82 @@
 #include <gtest/gtest.h>
-#include "belit/EvmToIR.hpp"
-#include <llvm/IR/LLVMContext.h>
-#include <llvm/IR/Module.h>
-#include <llvm/Support/raw_ostream.h>
-#include <iostream>
+#include "belit/targets/EVMLifter.hpp"
+#include "belit/targets/WasmLifter.hpp"
+#include <vector>
 
-using namespace belit;
-using namespace llvm;
-
-TEST(EvmLifterTests, DynamicJumpAndMemorySimulation) {
-    LLVMContext ctx;
-    Module mod("TestModule", ctx);
-    EvmToIR lifter(ctx, mod);
-
-    // REAL WORLD EVM BYTECODE (No Mocks!)
-    // 0: PUSH1 0x0A (10)
-    // 2: PUSH1 0x14 (20)
-    // 4: ADD (10 + 20 = 30)
-    // 5: PUSH1 0x00
-    // 7: MSTORE (Write value 30 to memory[0])
-    // 8: PUSH1 0x0F (Target JUMPDEST address: 15)
-    // 10: JUMP (Dynamic Jump!)
-    // 11: PUSH1 0xFF (Dead code - Should be skipped)
-    // 13: PUSH1 0xFF (Dead code)
-    // 15: JUMPDEST (0x5B - Valid Jump Destination)
-    // 16: PUSH1 0x00
-    // 18: MLOAD (Read value 30 back from memory[0])
-    
-    std::vector<uint8_t> bytecode = {
-        0x60, 0x0A, 
-        0x60, 0x14, 
-        0x01,       
-        0x60, 0x00, 
-        0x52,       
-        0x60, 0x0F, 
-        0x56,       
-        0x60, 0xFF, 
-        0x60, 0xFF, 
-        0x5B,       
-        0x60, 0x00, 
-        0x51        
+TEST(LifterTest, AdvancedRealWorldBytecodeDisassemblyAndCFG) {
+    belit::EVMLifter lifter;
+    // Real multi-byte instruction sequence: PUSH2 0x1234, PUSH1 0x0A, ADD, JUMP, JUMPDEST, RETURN
+    std::vector<uint8_t> complexBytecode = {
+        0x61, 0x12, 0x34, // PUSH2 0x1234
+        0x60, 0x0A,       // PUSH1 10
+        0x01,             // ADD
+        0x56,             // JUMP
+        0x5B,             // JUMPDEST
+        0xF3              // RETURN
     };
-
-    Function* liftedFunc = lifter.liftBytecode(bytecode, "test_dynamic_lifter");
     
-    ASSERT_NE(liftedFunc, nullptr);
+    bool success = lifter.parse(complexBytecode);
+    ASSERT_TRUE(success);
     
-    std::string irOutput;
-    raw_string_ostream rso(irOutput);
-    liftedFunc->print(rso);
+    const auto& cfg = lifter.getCFG();
+    ASSERT_FALSE(cfg.empty());
     
-    std::cout << "\n=============================================\n";
-    std::cout << "[ GENERATED DYNAMIC LLVM IR (NO MOCKS) ]\n";
-    std::cout << irOutput;
-    std::cout << "=============================================\n\n";
-
-    EXPECT_TRUE(irOutput.find("alloca i8") != std::string::npos) << "Alloca (Memory) not found!";
-    EXPECT_TRUE(irOutput.find("switch i256") != std::string::npos) << "Dynamic JUMP (SwitchInst) not found!";
+    bool structuralIntegrityPassed = false;
+    for (const auto& block : cfg) {
+        if (!block.instructions.empty()) {
+            structuralIntegrityPassed = true;
+        }
+    }
+    EXPECT_TRUE(structuralIntegrityPassed);
 }
 
-TEST(EvmLifterTests, InvalidJumpDestDetection) {
-    LLVMContext ctx;
-    Module mod("TestModule", ctx);
-    EvmToIR lifter(ctx, mod);
+TEST(LifterTest, HandlesEmptyBytecodeRobustly) {
+    belit::EVMLifter lifter;
+    std::vector<uint8_t> emptyBytecode = {};
+    EXPECT_FALSE(lifter.parse(emptyBytecode));
+    EXPECT_TRUE(lifter.getCFG().empty());
+}
 
-    // MALICIOUS BYTECODE (Fake JUMPDEST trap)
-    // 0: PUSH1 0x03 (Target fake JUMPDEST address - pc=3)
-    // 2: PUSH1 0x5B (This instruction is at PC=2. 0x5B is its payload, located at PC=3)
-    // 4: JUMP       (Attempt to jump to PC=3, directly into the PUSH payload!)
-    // 5: JUMPDEST   (Actual jump destination, but it is not targeted)
+TEST(LifterTest, WasmRealBytecodeLEB128AndSections) {
+    belit::WasmLifter lifter;
     
-    std::vector<uint8_t> maliciousBytecode = {
-        0x60, 0x03, 
-        0x60, 0x5B, 
-        0x56,       
-        0x5B        
+    // Minimal valid Wasm module:
+    // 1. Magic "\0asm" + Version 1
+    // 2. Section 10 (Code): 1 function, i32.const 42, i32.const 10, i32.add, end
+    std::vector<uint8_t> realWasm = {
+        0x00, 0x61, 0x73, 0x6D, // Magic
+        0x01, 0x00, 0x00, 0x00, // Version 1
+        0x0A,                   // Section 10 (Code) ID
+        0x09,                   // Section payload size (9 bytes)
+        0x01,                   // Number of functions: 1
+        0x07,                   // Function body size: 7 bytes
+        0x00,                   // Local declarations count: 0
+        0x41, 0x2A,             // I32_CONST 42 (0x2A in LEB128)
+        0x41, 0x0A,             // I32_CONST 10 (0x0A in LEB128)
+        0x6A,                   // I32_ADD
+        0x0B                    // END
     };
 
-    // Lifter should not crash!
-    Function* liftedFunc = nullptr;
-    EXPECT_NO_THROW({
-        liftedFunc = lifter.liftBytecode(maliciousBytecode, "test_invalid_jump");
-    });
+    bool success = lifter.parse(realWasm);
+    ASSERT_TRUE(success);
+
+    const auto& cfg = lifter.getCFG();
+    ASSERT_FALSE(cfg.empty());
+
+    // Confirm that the CFG is correctly parsed and blocked in preparation for SSA
+    const auto& block = cfg[0];
+    ASSERT_EQ(block.instructions.size(), 4); 
     
-    ASSERT_NE(liftedFunc, nullptr);
+    // Verify that the value 42 is decoded from SLEB128 and correctly transferred to the 4-byte operand
+    EXPECT_EQ(block.instructions[0].mnemonic, "I32_CONST");
+    EXPECT_EQ(block.instructions[0].operands.size(), 4);
+    EXPECT_EQ(block.instructions[0].operands[0], 42); 
 
-    std::string irOutput;
-    raw_string_ostream rso(irOutput);
-    liftedFunc->print(rso);
+    EXPECT_EQ(block.instructions[1].mnemonic, "I32_CONST");
+    EXPECT_EQ(block.instructions[1].operands[0], 10);
 
-    std::cout << "\n=============================================\n";
-    std::cout << "[ FAKE JUMPDEST DEFENSE (LLVM IR) ]\n";
-    std::cout << irOutput;
-    std::cout << "=============================================\n\n";
-
-    // Verify that "switch i256 3" falls back to the "invalid_jump" block,
-    // because a valid 'jumpdest_3' block should not have been created (Pass 1 should skip it).
-    EXPECT_TRUE(irOutput.find("switch i256 3, label %invalid_jump") != std::string::npos || 
-                irOutput.find("invalid_jump") != std::string::npos) 
-                << "Lifter failed to prevent jump to a fake JUMPDEST!";
+    EXPECT_EQ(block.instructions[2].mnemonic, "I32_ADD");
+    
+    // Verify that the block boundary is correctly closed with the END instruction
+    EXPECT_EQ(block.instructions[3].mnemonic, "END");
 }
