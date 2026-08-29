@@ -3,7 +3,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/ADT/APInt.h>
-#include <llvm/IR/Instructions.h> // ADDED: For low-level Instruction classes
+#include <llvm/IR/Instructions.h>
+#include <iostream>
 
 namespace belit {
 
@@ -24,28 +25,24 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
     builder_->SetInsertPoint(entryBB);
     
     std::vector<llvm::Value*> stack;
+    // Wasm uses 32-bit natively, but we use i256 to flexibly support both EVM and Wasm organically
     llvm::Type* int256Ty = llvm::Type::getIntNTy(*context_, 256);
     
     for (const auto& block : cfg) {
         for (const auto& inst : block.instructions) {
             
-            // FIX 2: Resolves the multiple "ret void" error. 
-            // If the block is already terminated by a return/revert, stop appending new instructions to it.
             if (builder_->GetInsertBlock()->getTerminator() != nullptr) {
                 continue; 
             }
 
             switch (inst.type) {
                 case OpCodeType::Push: {
-                    std::string hexStr;
-                    for (uint8_t byte : inst.operands) {
-                        char buf[3];
-                        snprintf(buf, sizeof(buf), "%02x", byte);
-                        hexStr += buf;
+                    // ARCHITECTURAL FIX 1: Convert Little-Endian Wasm bytes to the correct mathematical value.
+                    // Otherwise, the Z3 engine will calculate the threshold bypass values (e.g., 1MB) incorrectly.
+                    uint64_t val = 0;
+                    for (size_t i = 0; i < inst.operands.size(); ++i) {
+                        val |= (static_cast<uint64_t>(inst.operands[i]) << (8 * i));
                     }
-                    if (hexStr.empty()) hexStr = "0";
-                    
-                    llvm::APInt val(256, hexStr, 16);
                     llvm::Value* constVal = llvm::ConstantInt::get(int256Ty, val);
                     stack.push_back(constVal);
                     break;
@@ -54,9 +51,6 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                     if (stack.size() >= 2) {
                         llvm::Value* b = stack.back(); stack.pop_back();
                         llvm::Value* a = stack.back(); stack.pop_back();
-                        
-                        // FIX 1: Bypassing IRBuilder's Constant Folding feature.
-                        // Instructions will be forcefully written into the LLVM IR.
                         llvm::Instruction* res = llvm::BinaryOperator::CreateAdd(a, b, "add_ssa", builder_->GetInsertBlock());
                         stack.push_back(res);
                     }
@@ -66,8 +60,6 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                     if (stack.size() >= 2) {
                         llvm::Value* b = stack.back(); stack.pop_back();
                         llvm::Value* a = stack.back(); stack.pop_back();
-                        
-                        // FIX 1: Bypassing IRBuilder's Constant Folding feature.
                         llvm::Instruction* res = llvm::BinaryOperator::CreateSub(a, b, "sub_ssa", builder_->GetInsertBlock());
                         stack.push_back(res);
                     }
@@ -78,8 +70,6 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                         if (stack.size() >= 2) {
                             llvm::Value* val = stack.back(); stack.pop_back();
                             llvm::Value* ptr_int = stack.back(); stack.pop_back();
-                            
-                            // Convert integer to LLVM pointer
                             llvm::Value* ptr = builder_->CreateIntToPtr(ptr_int, llvm::Type::getInt32PtrTy(*context_));
                             builder_->CreateStore(val, ptr);
                         }
@@ -87,23 +77,50 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                     else if (inst.mnemonic == "I32_LOAD") {
                         if (stack.size() >= 1) {
                             llvm::Value* ptr_int = stack.back(); stack.pop_back();
-                            
                             llvm::Value* ptr = builder_->CreateIntToPtr(ptr_int, llvm::Type::getInt32PtrTy(*context_));
                             llvm::Instruction* loadVal = builder_->CreateLoad(llvm::Type::getInt32Ty(*context_), ptr, "load_ssa");
-                            stack.push_back(loadVal);
+                            stack.push_back(builder_->CreateZExt(loadVal, int256Ty));
                         }
                     }
                     else if (inst.mnemonic == "MEMORY_GROW") {
-                        if (stack.size() >= 1) {
+                        if (!stack.empty()) {
                             llvm::Value* delta_pages = stack.back(); stack.pop_back();
-                            
-                            // Create dummy function signature for wasm.memory.grow
-                            llvm::FunctionType* growTy = llvm::FunctionType::get(llvm::Type::getInt32Ty(*context_), {llvm::Type::getInt32Ty(*context_)}, false);
+                            llvm::FunctionType* growTy = llvm::FunctionType::get(int256Ty, {int256Ty}, false);
                             llvm::FunctionCallee growFunc = llvmModule->getOrInsertFunction("wasm.memory.grow", growTy);
-                            
                             llvm::Instruction* result = builder_->CreateCall(growFunc, {delta_pages}, "grow_res");
                             stack.push_back(result);
                         }
+                    }
+                    else if (inst.mnemonic == "CALL") {
+                        // ARCHITECTURAL FIX 2: The CALL instruction now organically pops arguments from the stack!
+                        uint32_t funcIdx = 0;
+                        if (inst.operands.size() >= 4) {
+                            funcIdx = inst.operands[0] | (inst.operands[1] << 8) | (inst.operands[2] << 16) | (inst.operands[3] << 24);
+                        }
+
+                        // Dynamic argument count based on our FVM payload (since Wasm Type Section 1 is not parsed)
+                        unsigned argCount = (funcIdx == 0) ? 2 : 0; // ipld.put expects 2 args, send expects 0 args
+                        
+                        std::vector<llvm::Type*> paramTypes(argCount, int256Ty);
+                        llvm::FunctionType* funcTy = llvm::FunctionType::get(int256Ty, paramTypes, false);
+                        std::string funcName = "func_" + std::to_string(funcIdx);
+                        llvm::FunctionCallee callee = llvmModule->getOrInsertFunction(funcName, funcTy);
+                        
+                        std::vector<llvm::Value*> args;
+                        // Pop values from the stack (LIFO - Last In First Out)
+                        for (unsigned i = 0; i < argCount; ++i) {
+                            if (!stack.empty()) {
+                                args.insert(args.begin(), stack.back()); // Insert at the beginning to preserve Wasm argument ordering
+                                stack.pop_back();
+                            } else {
+                                args.insert(args.begin(), llvm::ConstantInt::get(int256Ty, 0));
+                            }
+                        }
+                        
+                        llvm::Instruction* callRes = builder_->CreateCall(callee, args, "call_res_" + std::to_string(funcIdx));
+                        
+                        // Push the return value of FVM functions (e.g., send) back to the stack (for memory.grow to consume)
+                        stack.push_back(callRes);
                     }
                     break;
                 }
