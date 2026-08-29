@@ -56,27 +56,63 @@ TEST(LifterTest, WasmRealBytecodeLEB128AndSections) {
         0x6A,                   // I32_ADD
         0x0B                    // END
     };
-
+    
     bool success = lifter.parse(realWasm);
     ASSERT_TRUE(success);
-
     const auto& cfg = lifter.getCFG();
     ASSERT_FALSE(cfg.empty());
-
+    
     // Confirm that the CFG is correctly parsed and blocked in preparation for SSA
     const auto& block = cfg[0];
-    ASSERT_EQ(block.instructions.size(), 4); 
+    ASSERT_EQ(block.instructions.size(), 4);
     
     // Verify that the value 42 is decoded from SLEB128 and correctly transferred to the 4-byte operand
     EXPECT_EQ(block.instructions[0].mnemonic, "I32_CONST");
     EXPECT_EQ(block.instructions[0].operands.size(), 4);
-    EXPECT_EQ(block.instructions[0].operands[0], 42); 
-
+    EXPECT_EQ(block.instructions[0].operands[0], 42);
+    
     EXPECT_EQ(block.instructions[1].mnemonic, "I32_CONST");
     EXPECT_EQ(block.instructions[1].operands[0], 10);
-
     EXPECT_EQ(block.instructions[2].mnemonic, "I32_ADD");
     
     // Verify that the block boundary is correctly closed with the END instruction
     EXPECT_EQ(block.instructions[3].mnemonic, "END");
+}
+
+TEST(LifterTest, EVMStrictHaltOnUnknownOpcode) {
+    belit::EVMLifter lifter;
+    
+    // 0x60 0x01 (PUSH1 1), followed by 0xFC (UNMAPPED/UNKNOWN), then 0x00 (STOP)
+    std::vector<uint8_t> corruptedBytecode = {
+        0x60, 0x01, 
+        0xFC,       // STRICT HALT TRIGGER: 0xFC is an invalid EVM opcode
+        0x00
+    };
+    
+    // The lifter MUST reject the entire payload immediately, leaving the CFG empty.
+    bool success = lifter.parse(corruptedBytecode);
+    EXPECT_FALSE(success);
+    EXPECT_TRUE(lifter.getCFG().empty());
+}
+
+TEST(LifterTest, WasmStrictHaltOnUnknownOpcode) {
+    belit::WasmLifter lifter;
+    
+    // Valid Magic & Version, but Section 10 contains an unmapped opcode (0xFE)
+    std::vector<uint8_t> corruptedWasm = {
+        0x00, 0x61, 0x73, 0x6D, // Magic
+        0x01, 0x00, 0x00, 0x00, // Version 1
+        0x0A,                   // Section 10 (Code) ID
+        0x06,                   // Section payload size
+        0x01,                   // Number of functions: 1
+        0x04,                   // Function body size
+        0x00,                   // Local declarations count: 0
+        0xFE,                   // STRICT HALT TRIGGER: Unmapped opcode
+        0x0B                    // END
+    };
+    
+    // The lifter MUST reject the entire payload immediately, leaving the CFG empty.
+    bool success = lifter.parse(corruptedWasm);
+    EXPECT_FALSE(success);
+    EXPECT_TRUE(lifter.getCFG().empty());
 }

@@ -28,7 +28,7 @@ bool EVMLifter::parse(const std::vector<uint8_t>& rawBytecode) {
         uint8_t op = rawBytecode[i];
         Instruction inst;
         inst.pc = i;
-        inst.type = OpCodeType::Unknown; // CRITICAL FIX: Safe initialization upfront
+        inst.type = OpCodeType::Unknown; 
 
         // 1. PUSH, DUP, SWAP, LOG Operations (Dynamic size parsing)
         if (op >= 0x60 && op <= 0x7F) { // PUSH1 - PUSH32
@@ -129,11 +129,14 @@ bool EVMLifter::parse(const std::vector<uint8_t>& rawBytecode) {
                 case 0xFF: inst.mnemonic = "SELFDESTRUCT"; break;
                 
                 default: 
-                    inst.mnemonic = "UNKNOWN_" + std::to_string(op); 
-                    break;
+                    // STRICT HALT & PROVE: No graceful degradation. 
+                    // Unmapped opcode implies obfuscation attempt or corrupted payload.
+                    // Reject parsing immediately.
+                    reset();
+                    return false;
             }
         }
-
+        
         currentBlock.instructions.push_back(inst);
 
         // 3. Precise Control Flow Graph (CFG) Block Boundaries
