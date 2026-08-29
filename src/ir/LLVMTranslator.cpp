@@ -37,12 +37,26 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
 
             switch (inst.type) {
                 case OpCodeType::Push: {
-                    // ARCHITECTURAL FIX 1: Convert Little-Endian Wasm bytes to the correct mathematical value.
-                    // Otherwise, the Z3 engine will calculate the threshold bypass values (e.g., 1MB) incorrectly.
+                    // ARCHITECTURAL FIX 1: Authentic LEB128 and SLEB128 Decoding
+                    // Wasm does not store raw Little-Endian bytes; it uses compressed LEB128.
+                    // We must fully decode this so exact thresholds (e.g., 100 pages) reach Z3.
                     uint64_t val = 0;
+                    unsigned shift = 0;
                     for (size_t i = 0; i < inst.operands.size(); ++i) {
-                        val |= (static_cast<uint64_t>(inst.operands[i]) << (8 * i));
+                        uint8_t byte = inst.operands[i];
+                        val |= (static_cast<uint64_t>(byte & 0x7F) << shift);
+                        shift += 7;
+                        if ((byte & 0x80) == 0) break; // End of LEB128 chain
                     }
+                    
+                    // Sign extension for SLEB128 (Signed LEB128 used in i32.const)
+                    if (!inst.operands.empty()) {
+                        uint8_t lastByte = inst.operands.back();
+                        if ((shift < 64) && (lastByte & 0x40)) {
+                            val |= (~0ULL << shift);
+                        }
+                    }
+                    
                     llvm::Value* constVal = llvm::ConstantInt::get(int256Ty, val);
                     stack.push_back(constVal);
                     break;
@@ -85,21 +99,28 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                     else if (inst.mnemonic == "MEMORY_GROW") {
                         if (!stack.empty()) {
                             llvm::Value* delta_pages = stack.back(); stack.pop_back();
-                            llvm::FunctionType* growTy = llvm::FunctionType::get(int256Ty, {int256Ty}, false);
+                            
+                            // ARCHITECTURAL FIX 2: Z3 expects 'wasm.memory.grow' to strictly use i32 types.
+                            // We truncate our i256 down to i32 for the system call, then zero-extend back.
+                            llvm::Type* int32Ty = llvm::Type::getInt32Ty(*context_);
+                            llvm::FunctionType* growTy = llvm::FunctionType::get(int32Ty, {int32Ty}, false);
                             llvm::FunctionCallee growFunc = llvmModule->getOrInsertFunction("wasm.memory.grow", growTy);
-                            llvm::Instruction* result = builder_->CreateCall(growFunc, {delta_pages}, "grow_res");
-                            stack.push_back(result);
+                            
+                            // Safe truncation to satisfy Z3's rigid memory bounds signature
+                            llvm::Value* delta32 = builder_->CreateTrunc(delta_pages, int32Ty);
+                            llvm::Instruction* result = builder_->CreateCall(growFunc, {delta32}, "grow_res");
+                            
+                            stack.push_back(builder_->CreateZExt(result, int256Ty));
                         }
                     }
                     else if (inst.mnemonic == "CALL") {
-                        // ARCHITECTURAL FIX 2: The CALL instruction now organically pops arguments from the stack!
                         uint32_t funcIdx = 0;
                         if (inst.operands.size() >= 4) {
                             funcIdx = inst.operands[0] | (inst.operands[1] << 8) | (inst.operands[2] << 16) | (inst.operands[3] << 24);
                         }
 
-                        // Dynamic argument count based on our FVM payload (since Wasm Type Section 1 is not parsed)
-                        unsigned argCount = (funcIdx == 0) ? 2 : 0; // ipld.put expects 2 args, send expects 0 args
+                        // Dynamic argument count based on our FVM payload 
+                        unsigned argCount = (funcIdx == 0) ? 2 : 0; 
                         
                         std::vector<llvm::Type*> paramTypes(argCount, int256Ty);
                         llvm::FunctionType* funcTy = llvm::FunctionType::get(int256Ty, paramTypes, false);
@@ -107,10 +128,9 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                         llvm::FunctionCallee callee = llvmModule->getOrInsertFunction(funcName, funcTy);
                         
                         std::vector<llvm::Value*> args;
-                        // Pop values from the stack (LIFO - Last In First Out)
                         for (unsigned i = 0; i < argCount; ++i) {
                             if (!stack.empty()) {
-                                args.insert(args.begin(), stack.back()); // Insert at the beginning to preserve Wasm argument ordering
+                                args.insert(args.begin(), stack.back()); 
                                 stack.pop_back();
                             } else {
                                 args.insert(args.begin(), llvm::ConstantInt::get(int256Ty, 0));
@@ -118,8 +138,6 @@ std::unique_ptr<llvm::Module> LLVMTranslator::translateToLLVM(const std::vector<
                         }
                         
                         llvm::Instruction* callRes = builder_->CreateCall(callee, args, "call_res_" + std::to_string(funcIdx));
-                        
-                        // Push the return value of FVM functions (e.g., send) back to the stack (for memory.grow to consume)
                         stack.push_back(callRes);
                     }
                     break;
