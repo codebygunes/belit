@@ -2,6 +2,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdint>
+#include <string>
 
 namespace belit {
 
@@ -113,6 +114,21 @@ bool WasmLifter::parse(const std::vector<uint8_t>& rawBytecode) {
                         case 0x0C: inst.mnemonic = "BR"; inst.type = OpCodeType::Jump; readULEB128(rawBytecode, offset); break;
                         case 0x0D: inst.mnemonic = "BR_IF"; inst.type = OpCodeType::Jump; readULEB128(rawBytecode, offset); break;
                         case 0x0F: inst.mnemonic = "RETURN"; inst.type = OpCodeType::Return; break;
+                        
+                        // --- FVM HOST CALL DESTEĞİ (EKLENDİ) ---
+                        case 0x10: { 
+                            inst.mnemonic = "CALL"; 
+                            inst.type = OpCodeType::Unknown; 
+                            uint32_t funcIdx = static_cast<uint32_t>(readULEB128(rawBytecode, offset));
+                            // Fonksiyon indeksini LLVMTranslator'ın okuyabilmesi için operandlara yazıyoruz
+                            inst.operands = {
+                                static_cast<uint8_t>(funcIdx & 0xFF),
+                                static_cast<uint8_t>((funcIdx >> 8) & 0xFF),
+                                static_cast<uint8_t>((funcIdx >> 16) & 0xFF),
+                                static_cast<uint8_t>((funcIdx >> 24) & 0xFF)
+                            };
+                            break;
+                        }
                         
                         // Variables
                         case 0x20: inst.mnemonic = "LOCAL_GET"; readULEB128(rawBytecode, offset); break;
