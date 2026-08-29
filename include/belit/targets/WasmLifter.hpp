@@ -2,6 +2,8 @@
 #define BELIT_WASMLIFTER_HPP
 
 #include "belit/targets/ILifter.hpp"
+#include <string>
+#include <vector>
 
 namespace belit {
 
@@ -17,8 +19,12 @@ public:
     const std::vector<BasicBlock>& getCFG() const override;
     void reset() override;
 
+    // --- NEW: Access to FVM function names extracted from Wasm Section 2 ---
+    const std::vector<std::string>& getImportedFunctions() const { return importedFunctions_; }
+
 private:
     std::vector<BasicBlock> cfg_;
+    std::vector<std::string> importedFunctions_; // FVM host call names
 };
 
 } // namespace belit
