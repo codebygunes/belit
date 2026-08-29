@@ -14,10 +14,10 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v3
 
-    - name: Install System Dependencies (LLVM 18 & Z3)
+    - name: Install System Dependencies (LLVM 17, Z3 & GTest)
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake g++ libz3-dev llvm-18-dev libclang-18-dev
+        sudo apt-get install -y cmake g++ libz3-dev llvm-17-dev libclang-17-dev libgtest-dev libgmock-dev
 
     - name: Configure CMake
       run: |
