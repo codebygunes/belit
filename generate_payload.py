@@ -28,6 +28,7 @@ def encode_sleb128(val):
 
 magic_version = b"\x00\x61\x73\x6d\x01\x00\x00\x00"
 
+# Section 2: Imports ("fvm"."ipld.put" expects 2 args, "fvm"."send" expects 0 args)
 mod_name = b"fvm"
 field1 = b"ipld.put"
 field2 = b"send"
@@ -38,19 +39,23 @@ import_entry2 = encode_uleb128(len(mod_name)) + mod_name + encode_uleb128(len(fi
 imports_payload = encode_uleb128(2) + import_entry1 + import_entry2
 section2 = b"\x02" + encode_uleb128(len(imports_payload)) + imports_payload
 
+# Section 3: Function Section
 section3 = b"\x03\x02\x01\x01"
+
+# Section 5: Memory Section
 section5 = b"\x05\x03\x01\x00\x01"
 
-# ORGANİK VE ZEHİRLİ KOD (Z3'ü tetikleyecek limit aşımları yığıta itiliyor)
+# ORGANIC AND MALICIOUS CODE BODY (Fixed Syntax)
 code_body = (
-    b"\x00"                               # 0 local declarations
-    b"\x41\x00"                           # i32.const 0 (arg 1: IPLD address)
-    + b"\x41" + encode_sleb128(2097152) + # i32.const 2097152 (arg 2: IPLD size > 1MB)
-    b"\x10\x00"                           # call 0 (fvm.ipld.put)
-    b"\x10\x01"                           # call 1 (fvm.send triggers Reentrancy)
-    + b"\x41" + encode_sleb128(100) +     # i32.const 100 (arg 1: 100 pages for memory.grow -> Out of Bounds)
-    b"\x40\x00"                           # memory.grow
-    b"\x0b"                               # end
+    b"\x00"                               + # 0 local declarations
+    b"\x41\x00"                           + # i32.const 0 (arg 1: IPLD address)
+    b"\x41" + encode_sleb128(2097152)     + # i32.const 2097152 (arg 2: IPLD size > 1MB)
+    b"\x10\x00"                           + # call 0 (fvm.ipld.put)
+    b"\x10\x01"                           + # call 1 (fvm.send triggers Reentrancy)
+    b"\x41" + encode_sleb128(99999999)    + # i32.const 99999999 (Memory Out-of-Bounds Address)
+    b"\x41" + encode_sleb128(42)          + # i32.const 42 (Malicious Data to Write)
+    b"\x36\x02\x00"                       + # i32.store (Memory OOB Trigger)
+    b"\x0b"                                 # end
 )
 
 code_entry = encode_uleb128(len(code_body)) + code_body
