@@ -1,16 +1,18 @@
 # Protocol Labs Grant Proposal: Belit - Formal Verification Engine for FVM
 
 ## 1. Project Overview
-**Project Name:** Belit
-**Category:** Core Infrastructure / WebAssembly & Filecoin Virtual Machine (FVM) Security
+**Project Name:** Belit  
+**Category:** Core Infrastructure / WebAssembly & Filecoin Virtual Machine (FVM) Security  
 **License:** MIT (Public Good)
 
 ### 1.1. Abstract
 In the Filecoin Virtual Machine (FVM) and decentralized Compute-over-Data infrastructures, trusting execution nodes with WebAssembly (Wasm) payloads is a critical bottleneck. Current security paradigms heavily rely on heuristic static analysis tools, pattern matchers, and fuzzers. While effective for common anti-patterns, heuristics guess rather than prove; they cannot mathematically guarantee the absence of complex state manipulation, memory leaks, or obfuscated vulnerabilities at the virtual machine bytecode level.
 
-**Belit** eliminates this uncertainty by introducing a unique architectural paradigm: it is an open-source SMT-LLVM bridge that translates FVM WebAssembly binary targets into a single, standardized Static Single Assignment (SSA) LLVM Intermediate Representation (IR). Going beyond generic Wasm analysis, Belit explicitly models FVM host environment constraints. By combining custom LLVM deobfuscation pass plugins with the Microsoft Z3 SMT solver, Belit models software execution—including IPLD state writes and cross-actor messages—as rigorous geometric and bit-vector constraints.
+**Belit** eliminates this uncertainty by introducing a unique architectural paradigm: it is an open-source SMT-LLVM bridge that translates FVM WebAssembly binary targets into a single, standardized Static Single Assignment (SSA) LLVM Intermediate Representation (IR). Going beyond generic Wasm analysis, Belit explicitly models FVM host environment constraints. By combining custom LLVM deobfuscation pass plugins with the Microsoft Z3 SMT solver, Belit models software execution including IPLD state writes and cross-actor messages as rigorous geometric and bit-vector constraints. 
 
-We have developed a **Functional Alpha Proof-of-Concept (PoC)** that successfully parses production-grade Wasm bytecodes, decodes LEB128 variables, processes Section 10 (Code) structured control flows, and translates memory operations directly into the LLVM IR bridge. This grant will fund the evolution of Belit into a robust, production-grade automated CI/CD security infrastructure tool, optimized specifically for Protocol Labs' FVM and distributed nodes.
+We have developed a **Functional Alpha Proof-of-Concept (PoC)** that successfully parses production-grade Wasm bytecodes, decodes LEB128 variables, processes Section 10 (Code) structured control flows, and translates memory operations directly into the LLVM IR bridge. Crucially, Belit enforces a **"Strict Halt & Prove"** model: any unmapped opcode or structural corruption immediately halts execution and rejects the payload, preventing bypass exploits. 
+
+This grant will fund the evolution of Belit into a robust, developer-friendly CLI tool (`belit analyze`) and headless CI/CD security infrastructure, optimized specifically for Protocol Labs' FVM and distributed nodes.
 
 ### 1.2. Problem Statement & "Verifiable Computation"
 While binary analysis tools exist, decentralized network operators and FVM smart contract developers face critical bottlenecks that existing tools fail to solve:
@@ -18,23 +20,33 @@ While binary analysis tools exist, decentralized network operators and FVM smart
 2. **Blindness to FVM Host Constraints:** Standard analyzers are unaware of Protocol Labs' specific state environment. They cannot mathematically bound an `ipld::put` operation to prevent storage bloat, nor track the state-lock validations required before a cross-actor `fvm::send`.
 3. **Fragmented Tooling Ecosystem:** There is no universal, accessible open-source bridge translating Wasm bytecodes natively into formal verification solvers without massive manual overhead.
 4. **Obfuscation Resistance:** Malicious actors leverage opaque predicates and flattened control flow graphs to defeat standard inspection and bypass gas metering.
-5. **Zero-Tolerance for Unknowns:** Traditional tools often attempt to "gracefully degrade" upon encountering unknown opcodes. Belit enforces a **Strict Halt & Prove** model—any unmapped opcode immediately flags the payload as unverifiable, eliminating bypass exploits.
+5. **Zero-Tolerance for Unknowns:** Traditional tools often attempt to "gracefully degrade" upon encountering unknown opcodes. Belit enforces a strict halt model where unmapped opcodes are instantly rejected.
 
 Belit is a **compiler-infrastructure verification middleware**. By bridging low-level bytecodes directly into compiler-native LLVM IR and mapping SSA values to Z3 SMT constraints, Belit enforces automated, bulletproof mathematical proofs for sandboxed FVM execution.
 
-### 1.3. Value Proposition / Ecosystem Benefit
+### 1.3. Value Proposition, Ecosystem Benefit & Developer Experience
 Belit acts as an essential "Public Good" infrastructure for the Protocol Labs ecosystem:
-* **For FVM Node Operators:** A definitive logical proof engine that replaces guesswork with mathematical certainty. It actively prevents out-of-bounds memory traps and malicious IPLD storage bloat before untrusted payloads execute.
-* **For Smart Contract Developers:** A lightweight CLI pipeline (`belit`) to catch impossible state transitions, cross-actor reentrancy risks, integer overflows, and underflows locally during the development lifecycle.
+* **Frictionless Developer Experience:** Despite its deep academic foundation (LLVM & Z3 SMT), Belit completely abstracts away mathematical complexity from the end user. Developers and node operators interact with the engine via a single, lightning-fast command-line interface (`belit <payload.wasm>`), ensuring zero adoption friction.
+* **For FVM Node Operators:** A definitive logical proof engine that replaces guesswork with mathematical certainty, actively preventing out-of-bounds memory traps and malicious IPLD storage bloat before untrusted payloads execute.
+* **For Smart Contract Developers:** A lightweight CLI pipeline to catch impossible state transitions, cross-actor reentrancy risks, integer overflows, and underflows locally during the development lifecycle.
 
-## 2. Team Background & Feasibility
-**Lead Compiler Engineer:** Elif Nur Ayhan (@codebygunes)
-As a Software Engineer specializing in deep-tech security, formal verification, and LLVM-based transformations, I have single-handedly developed the current Belit Alpha. The PoC already features fully functional native Wasm bytecode parsing (LEB128, Section decoding), SSA stack modeling, and active Z3 SMT integration via LLVM IR bridging. The core engine is fully derisked, functionally tested, and ready for advanced FVM state modeling.
+---
 
-## 3. Budget & Funding Request
-This $45,000 USDC funding request is designed to scale the prototype into a production-ready verifiable computation tool over a 12-week intensive R&D period. The milestones have been structured to reflect the focused bandwidth of a dedicated solo engineer.
+## 2. Team Background, Feasibility & Sustainability Mitigations
 
-### 3.1. Budget Breakdown & Milestones
+### 2.1. Lead Compiler Engineer
+**Lead Compiler Engineer:** Elif Nur Ayhan (@codebygunes)  
+As a Software Engineer specializing in deep-tech security, formal verification, and LLVM-based transformations, I have single-handedly developed the current Belit Alpha. The PoC already features fully functional native Wasm bytecode parsing, strict unmapped opcode halting, SSA stack modeling, and active Z3 SMT integration via LLVM IR bridging. 
+
+### 2.2. Addressing Committee Risks & Sustainability
+To ensure operational transparency and long-term viability, we address potential committee concerns proactively:
+* **Key-Person Dependency (Solo Developer Mitigation):** The project is structured around a highly modular, clean-room compiler architecture (`ILifter`, `LLVMTranslator`, `Z3SymbolicEngine`). Comprehensive unit and E2E test suites paired with automated GitHub Actions CI/CD pipelines ensure that community contributors can audit, test, and extend the codebase without ambiguity.
+* **Post-Grant Sustainability:** As a pure MIT-licensed Public Good, Belit relies on standardized compiler building blocks (LLVM/Z3) that naturally align with broader open-source tooling, ensuring it remains maintainable and adoptable by any FVM-focused node infrastructure.
+
+---
+
+## 3. Budget & Funding Request ($45,000 USDC / 12 Weeks)
+
 | Milestone | Duration | Focus Area | Requested Grant Amount |
 | :--- | :--- | :--- | :--- |
 | **Milestone 1** | Weeks 1 - 4 | **FVM Linear Memory Modeling:** Expanding the existing `WasmLifter` to strictly map WebAssembly dynamic memory operations (`memory.grow`, `memory.size`, `i32.store`) into exact Z3 BitVector boundaries to mathematically prove the absence of out-of-bounds writes in FVM payloads. | $15,000 USDC |
