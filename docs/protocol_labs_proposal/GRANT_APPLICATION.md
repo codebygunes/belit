@@ -26,7 +26,7 @@ Belit is a **compiler-infrastructure verification middleware**. By bridging low-
 
 ### 1.3. Value Proposition, Ecosystem Benefit & Developer Experience
 Belit acts as an essential "Public Good" infrastructure for the Protocol Labs ecosystem:
-* **Frictionless Developer Experience:** Despite its deep academic foundation (LLVM & Z3 SMT), Belit completely abstracts away mathematical complexity from the end user. Developers and node operators interact with the engine via a single, lightning-fast command-line interface (`belit <payload.wasm>`), ensuring zero adoption friction.
+* **Frictionless Developer Experience & Zero-Setup:** To mitigate adoption friction regarding heavy C++ dependencies (LLVM/Z3), Belit provides pre-compiled containerized distributions (`Docker`) and a ready-to-use GitHub Action (`belit-action`). Developers and node operators interact with the engine via a single command or automated CI pipeline without compiling toolchains locally.
 * **For FVM Node Operators:** A definitive logical proof engine that replaces guesswork with mathematical certainty, actively preventing out-of-bounds memory traps and malicious IPLD storage bloat before untrusted payloads execute.
 * **For Smart Contract Developers:** A lightweight CLI pipeline to catch impossible state transitions, cross-actor reentrancy risks, integer overflows, and underflows locally during the development lifecycle.
 
@@ -40,7 +40,8 @@ As a Software Engineer specializing in deep-tech security, formal verification, 
 
 ### 2.2. Addressing Committee Risks & Sustainability
 To ensure operational transparency and long-term viability, we address potential committee concerns proactively:
-* **Key-Person Dependency (Solo Developer Mitigation):** The project is structured around a highly modular, clean-room compiler architecture (`ILifter`, `LLVMTranslator`, `Z3SymbolicEngine`). Comprehensive unit and E2E test suites paired with automated GitHub Actions CI/CD pipelines ensure that community contributors can audit, test, and extend the codebase without ambiguity.
+* **Key-Person Dependency & Community Roadmap:** The project is structured around a highly modular, clean-room compiler architecture (`ILifter`, `LLVMTranslator`, `Z3SymbolicEngine`). Comprehensive unit and E2E test suites paired with automated GitHub Actions CI/CD pipelines ensure seamless community audits. Furthermore, we commit to opening an early-access pilot program with volunteer FVM node operators and smart contract developers during Milestone 3 for real-world feedback loops.
+* **Realistic Phased Rollout & Scope Management:** To prevent state explosion risks within the 12-week window, the Z3 solver integration employs a tiered validation strategy (prioritizing critical memory bounds and IPLD limits first) rather than unbounded state space exploration.
 * **Post-Grant Sustainability:** As a pure MIT-licensed Public Good, Belit relies on standardized compiler building blocks (LLVM/Z3) that naturally align with broader open-source tooling, ensuring it remains maintainable and adoptable by any FVM-focused node infrastructure.
 
 ---
@@ -51,5 +52,5 @@ To ensure operational transparency and long-term viability, we address potential
 | :--- | :--- | :--- | :--- |
 | **Milestone 1** | Weeks 1 - 4 | **FVM Linear Memory Modeling:** Expanding the existing `WasmLifter` to strictly map WebAssembly dynamic memory operations (`memory.grow`, `memory.size`, `i32.store`) into exact Z3 BitVector boundaries to mathematically prove the absence of out-of-bounds writes in FVM payloads. | $15,000 USDC |
 | **Milestone 2** | Weeks 5 - 8 | **IPLD Limits & Deobfuscation Passes:** Optimizing the LLVM `DeobfuscationPass` to eliminate control flow flattening, while formally modeling FVM syscalls (`ipld::put`, `send`). This maps cleaned SSA forms to Z3 to prove strict constraints on IPLD block sizes and prevent cross-actor reentrancy. | $15,000 USDC |
-| **Milestone 3** | Weeks 9 - 12 | **FVM Ecosystem Integration & Headless CI/CD:** Delivering a fully automated verification pipeline ready for headless FVM node integration, complete with comprehensive E2E test suites, documentation, and a developer-friendly `belit` CLI. | $15,000 USDC |
+| **Milestone 3** | Weeks 9 - 12 | **FVM Ecosystem Integration, Docker & Pilot Testing:** Delivering a fully automated verification pipeline ready for headless FVM node integration, packaged with Docker images, GitHub Actions, and evaluated through an early-access pilot feedback program with community developers. | $15,000 USDC |
 | **TOTAL** | **12 Weeks** | **End-to-End FVM Verification Infrastructure** | **$45,000 USDC** |
