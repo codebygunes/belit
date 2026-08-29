@@ -37,11 +37,9 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
     for (auto& F : module) {
         for (auto& BB : F) {
             for (auto& I : BB) {
-                // 1. Tip Dönüşümlerini (IntToPtr / PtrToInt) Sembolik Olarak Aktar
                 if (auto* castInst = llvm::dyn_cast<llvm::CastInst>(&I)) {
                     sym_env.insert({&I, getZ3Expr(castInst->getOperand(0), sym_env)});
                 }
-                // 2. Matematiksel Zafiyetler (Overflow / Underflow)
                 else if (auto* binOp = llvm::dyn_cast<llvm::BinaryOperator>(&I)) {
                     z3::expr z3_a = getZ3Expr(binOp->getOperand(0), sym_env);
                     z3::expr z3_b = getZ3Expr(binOp->getOperand(1), sym_env);
@@ -51,7 +49,7 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
                         sym_env.insert({&I, res});
                         
                         solver_.push();
-                        solver_.add(z3::ult(res, z3_a)); // Overflow Proof
+                        solver_.add(z3::ult(res, z3_a));
                         if (solver_.check() == z3::sat) {
                             result.isSafe = false;
                             result.discoveredViolations.push_back("Mathematical Integer Overflow detected.");
@@ -62,7 +60,7 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
                         sym_env.insert({&I, res});
                         
                         solver_.push();
-                        solver_.add(z3::ult(z3_a, z3_b)); // Underflow Proof
+                        solver_.add(z3::ult(z3_a, z3_b));
                         if (solver_.check() == z3::sat) {
                             result.isSafe = false;
                             result.discoveredViolations.push_back("Mathematical Integer Underflow detected.");
@@ -70,7 +68,6 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
                         solver_.pop();
                     }
                 }
-                // 3. Bellek Taşmaları (Out-of-Bounds Write)
                 else if (auto* storeInst = llvm::dyn_cast<llvm::StoreInst>(&I)) {
                     z3::expr ptr_addr = getZ3Expr(storeInst->getPointerOperand(), sym_env);
                     z3::expr val = getZ3Expr(storeInst->getValueOperand(), sym_env);
@@ -85,7 +82,6 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
 
                     wasm_memory = z3::store(wasm_memory, ptr_addr, val.extract(7, 0)); 
                 }
-                // 4. Bellek Taşmaları (Out-of-Bounds Read)
                 else if (auto* loadInst = llvm::dyn_cast<llvm::LoadInst>(&I)) {
                     z3::expr ptr_addr = getZ3Expr(loadInst->getPointerOperand(), sym_env);
 
@@ -100,14 +96,34 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
                     z3::expr loaded_byte = z3::select(wasm_memory, ptr_addr);
                     sym_env.insert({&I, z3::zext(loaded_byte, 24)}); 
                 }
-                // 5. memory.grow Simulasyonu
+                // --- PROTOCOL LABS FVM EXCLUSIVE HOST CALL TRACKING ---
                 else if (auto* callInst = llvm::dyn_cast<llvm::CallInst>(&I)) {
-                    if (callInst->getCalledFunction() && callInst->getCalledFunction()->getName() == "wasm.memory.grow") {
-                        z3::expr pages_to_add = getZ3Expr(callInst->getArgOperand(0), sym_env);
-                        z3::expr byte_increment = pages_to_add * context_.bv_val(65536, 32);
+                    if (callInst->getCalledFunction()) {
+                        llvm::StringRef funcName = callInst->getCalledFunction()->getName();
                         
-                        current_mem_size = current_mem_size + byte_increment;
-                        sym_env.insert({&I, current_mem_size});
+                        if (funcName == "wasm.memory.grow") {
+                            z3::expr pages = getZ3Expr(callInst->getArgOperand(0), sym_env);
+                            current_mem_size = current_mem_size + (pages * context_.bv_val(65536, 32));
+                            sym_env.insert({&I, current_mem_size});
+                        }
+                        // Detect IPLD Block Manipulation (FVM fvm::ipld::put)
+                        else if (funcName.starts_with("ipld::put") || funcName == "fvm.ipld.put") {
+                            z3::expr size = getZ3Expr(callInst->getArgOperand(1), sym_env); // Size operand
+                            
+                            solver_.push();
+                            // FVM enforces max IPLD block sizes. Check if symbolic bounds can exceed 1MB.
+                            solver_.add(z3::ugt(size, context_.bv_val(1048576, 32))); 
+                            if (solver_.check() == z3::sat) {
+                                result.isSafe = false;
+                                result.discoveredViolations.push_back("FVM IPLD State Manipulation: Attempted to write an unconstrained or oversized data block to IPLD state.");
+                            }
+                            solver_.pop();
+                        }
+                        // Detect Cross-Actor Reentrancy (FVM fvm::actor::send)
+                        else if (funcName.starts_with("actor::send") || funcName == "fvm.send") {
+                            result.isSafe = false;
+                            result.discoveredViolations.push_back("FVM Actor Security Violation: Cross-actor 'send' call detected without provable state-lock validation (Reentrancy risk).");
+                        }
                     }
                 }
             }
@@ -115,9 +131,9 @@ VerificationResult Z3SymbolicEngine::verify(llvm::Module& module) {
     }
 
     if (result.isSafe) {
-        result.report = "Verification passed: Linear memory boundaries and mathematical constraints verified.";
+        result.report = "Verification passed: Linear memory boundaries and FVM host constraints verified.";
     } else {
-        result.report = "Verification failed: State violations or mathematical traps detected.";
+        result.report = "Verification failed: FVM State violations or mathematical traps detected.";
     }
 
     return result;
